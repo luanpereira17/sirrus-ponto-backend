@@ -161,7 +161,7 @@ export const FuncionarioRepository = {
 
     // Resultado paginado
     sql += ' ORDER BY f.nome ASC LIMIT ? OFFSET ?';
-    params.push(limit, offset);
+    params.push(parseInt(limit, 10), parseInt(offset, 10));
 
     const rows = await query(sql, params);
 
