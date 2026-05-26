@@ -36,8 +36,9 @@ await app.register(jwt, {
 });
 
 await app.register(rateLimit, {
-  max: 100,
+  max: 500,
   timeWindow: '1 minute',
+  keyGenerator: (request) => request.user?.id ?? request.ip,
 });
 
 // ─── ERROR HANDLER ────────────────────────────────────────────────────────
