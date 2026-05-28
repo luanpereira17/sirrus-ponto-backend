@@ -36,9 +36,17 @@ async function runMigrations() {
       const jaExiste =
         err.code === 'ER_TABLE_EXISTS_ERROR' ||
         err.code === 'ER_DUP_KEYNAME' ||
+        // Coluna já existe (ADD COLUMN em schema que já tem a coluna)
+        err.code === 'ER_DUP_FIELDNAME' ||
+        // Chave/FK não existe ao tentar dropar (DROP FK / DROP INDEX já removidos)
+        err.code === 'ER_CANT_DROP_FIELD_OR_KEY' ||
+        // Índice já existe (ADD INDEX / ADD UNIQUE INDEX)
+        err.code === 'ER_DUP_INDEX' ||
         // errno 121 = FK constraint name duplicada (InnoDB)
         (err.code === 'ER_CANT_CREATE_TABLE' && err.errno === 1005 &&
-          (err.sqlMessage?.includes('Duplicate') || err.sqlMessage?.includes('121')));
+          (err.sqlMessage?.includes('Duplicate') || err.sqlMessage?.includes('121'))) ||
+        // errno 1826 = nome de FK duplicado (MySQL 8)
+        err.errno === 1826;
 
       if (jaExiste) {
         console.log(`   ⚠️  ${file} — Já aplicado (objeto já existe), pulando...`);

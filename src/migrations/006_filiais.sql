@@ -25,9 +25,9 @@ CREATE TABLE IF NOT EXISTS filiais (
 
 -- ─── VINCULA FUNCIONÁRIO À FILIAL ────────────────────────────────────────────
 ALTER TABLE funcionarios
-  ADD COLUMN IF NOT EXISTS filial_id INT UNSIGNED NULL AFTER empresa_id;
+  ADD COLUMN filial_id INT UNSIGNED NULL AFTER empresa_id;
 
-ALTER TABLE funcionarios DROP FOREIGN KEY IF EXISTS fk_func_filial;
+ALTER TABLE funcionarios DROP FOREIGN KEY fk_func_filial;
 ALTER TABLE funcionarios
   ADD CONSTRAINT fk_func_filial
     FOREIGN KEY (filial_id) REFERENCES filiais(id)
@@ -35,4 +35,4 @@ ALTER TABLE funcionarios
 
 -- ─── ÍNDICE PARA FILTROS POR FILIAL ─────────────────────────────────────────
 ALTER TABLE funcionarios
-  ADD INDEX IF NOT EXISTS idx_func_filial (filial_id);
+  ADD INDEX idx_func_filial (filial_id);

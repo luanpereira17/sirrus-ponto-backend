@@ -2,7 +2,7 @@ USE ponto_web;
 
 -- ─── USA_ESCALA no funcionário ───────────────────────────────────────────────
 ALTER TABLE funcionarios
-  ADD COLUMN IF NOT EXISTS usa_escala TINYINT(1) NOT NULL DEFAULT 0
+  ADD COLUMN usa_escala TINYINT(1) NOT NULL DEFAULT 0
     COMMENT '1 = precisa de escala gerada; 0 = presença seg-sáb, falta automática'
   AFTER lotacao_id;
 

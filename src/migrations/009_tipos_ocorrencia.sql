@@ -19,12 +19,12 @@ CREATE TABLE IF NOT EXISTS tipos_ocorrencia (
 
 -- ─── COLUNAS EXTRAS NA TABELA OCORRÊNCIAS ────────────────────────────────────
 ALTER TABLE ocorrencias
-  ADD COLUMN IF NOT EXISTS tipo_ocorrencia_id INT UNSIGNED NULL
+  ADD COLUMN tipo_ocorrencia_id INT UNSIGNED NULL
     AFTER tipo,
-  ADD COLUMN IF NOT EXISTS turno ENUM('integral','1_periodo','2_periodo','3_periodo','4_periodo') NULL
+  ADD COLUMN turno ENUM('integral','1_periodo','2_periodo','3_periodo','4_periodo') NULL
     AFTER tipo_ocorrencia_id,
-  ADD COLUMN IF NOT EXISTS tipo_hora ENUM('hora_50_60','hora_100') NULL
+  ADD COLUMN tipo_hora ENUM('hora_50_60','hora_100') NULL
     AFTER turno,
-  ADD COLUMN IF NOT EXISTS quantidade_horas DECIMAL(5,2) UNSIGNED NULL
+  ADD COLUMN quantidade_horas DECIMAL(5,2) UNSIGNED NULL
     AFTER tipo_hora;
 

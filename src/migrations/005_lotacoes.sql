@@ -46,9 +46,9 @@ CREATE TABLE IF NOT EXISTS lotacoes (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 ALTER TABLE funcionarios
-  ADD COLUMN IF NOT EXISTS lotacao_id INT UNSIGNED NULL AFTER turno_id;
+  ADD COLUMN lotacao_id INT UNSIGNED NULL AFTER turno_id;
 
-ALTER TABLE funcionarios DROP FOREIGN KEY IF EXISTS fk_func_lotacao;
+ALTER TABLE funcionarios DROP FOREIGN KEY fk_func_lotacao;
 ALTER TABLE funcionarios
   ADD CONSTRAINT fk_func_lotacao
     FOREIGN KEY (lotacao_id) REFERENCES lotacoes(id)
