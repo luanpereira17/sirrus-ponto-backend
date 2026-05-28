@@ -4,6 +4,7 @@ import { UsuarioRepository } from '../repositories/usuarioRepository.js';
 import { AuthService } from '../services/authService.js';
 import { onlyCpfDigits } from '../utils/cpf.js';
 import { parsePagination, paginatedResponse, successResponse } from '../utils/helpers.js';
+import { auditar } from '../services/auditService.js';
 
 const createSchema = {
   body: {
@@ -153,7 +154,12 @@ export default async function funcionarioRoutes(fastify) {
       return reply.code(404).send({ error: 'Funcionário não encontrado' });
     }
 
+    const turnoIdAnterior = func.turno_id ?? null;
     await FuncionarioRepository.update(request.params.id, request.body);
+
+    if (request.body.turno_id !== undefined && request.body.turno_id !== turnoIdAnterior) {
+      auditar({ acao: 'UPDATE', tabela: 'funcionarios', registro_id: Number(request.params.id), dados_anteriores: { turno_id: turnoIdAnterior }, dados_novos: { turno_id: request.body.turno_id }, usuario_id: request.user.id, ip: request.ip });
+    }
 
     if (request.body.cpf !== undefined) {
       const d = onlyCpfDigits(request.body.cpf);

@@ -1,6 +1,7 @@
 import { authenticate, authorize, empresaScope } from '../middlewares/auth.js';
 import { query } from '../config/database.js';
 import { successResponse } from '../utils/helpers.js';
+import { auditar } from '../services/auditService.js';
 
 export default async function ocorrenciasRoutes(fastify) {
   fastify.addHook('preHandler', authenticate);
@@ -151,6 +152,7 @@ export default async function ocorrenciasRoutes(fastify) {
        request.user.id]
     );
 
+    auditar({ acao: 'INSERT', tabela: 'ocorrencias', registro_id: result.insertId, dados_anteriores: null, dados_novos: { funcionario_id, data_inicio, data_fim, tipo_ocorrencia_id, turno, tipo_hora }, usuario_id: request.user.id, ip: request.ip });
     return reply.code(201).send(successResponse({ id: result.insertId }, 'Ocorrência lançada'));
   });
 
@@ -180,6 +182,7 @@ export default async function ocorrenciasRoutes(fastify) {
     if (fields.length === 0) return reply.code(400).send({ error: 'Nenhum campo para atualizar' });
     values.push(request.params.id);
     await query(`UPDATE ocorrencias SET ${fields.join(', ')} WHERE id = ?`, values);
+    auditar({ acao: 'UPDATE', tabela: 'ocorrencias', registro_id: Number(request.params.id), dados_anteriores: null, dados_novos: Object.fromEntries(fields.map((f, i) => [f.split(' ')[0], values[i]])), usuario_id: request.user.id, ip: request.ip });
     return successResponse(null, 'Ocorrência atualizada');
   });
 
@@ -192,6 +195,7 @@ export default async function ocorrenciasRoutes(fastify) {
     );
     if (!existing) return reply.code(404).send({ error: 'Ocorrência não encontrada' });
     await query('DELETE FROM ocorrencias WHERE id = ?', [request.params.id]);
+    auditar({ acao: 'DELETE', tabela: 'ocorrencias', registro_id: Number(request.params.id), dados_anteriores: { id: existing.id }, dados_novos: null, usuario_id: request.user.id, ip: request.ip });
     return successResponse(null, 'Ocorrência excluída');
   });
 }

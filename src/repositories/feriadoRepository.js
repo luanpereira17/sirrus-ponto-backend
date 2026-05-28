@@ -10,15 +10,24 @@ export const FeriadoRepository = {
     const start = `${year}-${pad2(month)}-01`;
     const lastDay = new Date(year, month, 0).getDate();
     const end = `${year}-${pad2(month)}-${pad2(lastDay)}`;
+    const monthPad = pad2(month);
 
     return query(
-      `SELECT DATE_FORMAT(data, '%Y-%m-%d') AS dia, descricao, tipo
-         FROM feriados
-        WHERE empresa_id = ?
-          AND data >= ?
-          AND data <= ?
-        ORDER BY data`,
-      [empresaId, start, end],
+      `SELECT
+         IF(recorrente = 1,
+           CONCAT(?, '-', DATE_FORMAT(data, '%m-%d')),
+           DATE_FORMAT(data, '%Y-%m-%d')
+         ) AS dia,
+         descricao, tipo, uf, municipio_ibge
+       FROM feriados
+       WHERE empresa_id = ?
+         AND (
+           (recorrente = 0 AND data >= ? AND data <= ?)
+           OR
+           (recorrente = 1 AND DATE_FORMAT(data, '%m') = ?)
+         )
+       ORDER BY dia`,
+      [year, empresaId, start, end, monthPad],
     );
   },
 };

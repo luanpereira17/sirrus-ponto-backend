@@ -416,16 +416,44 @@ export default async function cadastrosRoutes(fastify) {
   // ═══════════════════════════════════════════════════════════════════
 
   fastify.get('/feriados', async (request) => {
-    const { ano } = request.query;
+    const { ano, search, tipo, page, limit } = request.query;
     const year = ano || new Date().getFullYear();
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(200, Math.max(1, parseInt(limit, 10) || 20));
+    const offset = (pageNum - 1) * limitNum;
 
-    const rows = await query(
-      `SELECT * FROM feriados
-       WHERE empresa_id = ? AND YEAR(data) = ?
-       ORDER BY data`,
-      [request.empresaId, year]
+    let sql = `
+      SELECT id, empresa_id,
+             IF(recorrente = 1, DATE_FORMAT(data, '%m-%d'), DATE_FORMAT(data, '%Y-%m-%d')) AS data,
+             descricao AS nome, tipo, uf, municipio_ibge,
+             recorrente, created_at
+        FROM feriados
+       WHERE empresa_id = ?`;
+    const params = [request.empresaId];
+
+    if (year) { sql += ' AND (recorrente = 1 OR YEAR(data) = ?)'; params.push(year); }
+    if (search) { sql += ' AND descricao LIKE ?'; params.push(`%${search}%`); }
+    if (tipo) { sql += ' AND tipo = ?'; params.push(tipo); }
+
+    const countSql = sql.replace(/SELECT[\s\S]+?FROM\s/i, 'SELECT COUNT(*) AS total FROM ');
+    const [countRow] = await query(countSql, params);
+
+    sql += ` ORDER BY data LIMIT ${limitNum} OFFSET ${offset}`;
+    const rows = await query(sql, params);
+    return successResponse({ rows, total: countRow.total });
+  });
+
+  fastify.get('/feriados/:id', {
+    preHandler: [authorize('admin')],
+  }, async (request, reply) => {
+    const [row] = await query(
+      `SELECT id, IF(recorrente = 1, DATE_FORMAT(data, '%m-%d'), DATE_FORMAT(data, '%Y-%m-%d')) AS data,
+              descricao AS nome, tipo, uf, municipio_ibge, recorrente
+         FROM feriados WHERE id = ? AND empresa_id = ?`,
+      [request.params.id, request.empresaId]
     );
-    return successResponse(rows);
+    if (!row) return reply.code(404).send({ error: 'Feriado não encontrado' });
+    return successResponse(row);
   });
 
   fastify.post('/feriados', {
@@ -433,21 +461,68 @@ export default async function cadastrosRoutes(fastify) {
     schema: {
       body: {
         type: 'object',
-        required: ['data', 'descricao'],
+        required: ['nome', 'data'],
         properties: {
-          data: { type: 'string', format: 'date' },
-          descricao: { type: 'string', minLength: 2 },
-          tipo: { type: 'string', enum: ['nacional', 'estadual', 'municipal', 'empresa'] },
-          recorrente: { type: 'integer', minimum: 0, maximum: 1 },
+          nome:       { type: 'string', minLength: 2, maxLength: 150 },
+          data:       { type: 'string' },
+          tipo:       { type: 'string', enum: ['nacional', 'estadual', 'municipal', 'empresa'] },
+          recorrente: { type: ['boolean', 'integer'] },
+          uf:         { type: ['string', 'null'], maxLength: 2 },
+          municipio_ibge: { type: ['string', 'null'], maxLength: 7 },
+          observacao: { type: ['string', 'null'] },
         },
       },
     },
   }, async (request, reply) => {
-    const { data, descricao, tipo, recorrente } = request.body;
+    const { nome, data, tipo, recorrente, uf, municipio_ibge } = request.body;
+    const isRecorrente = recorrente ? 1 : 0;
+    // Se recorrente, data vem como MM-DD; armazena com ano-base 2000
+    const dataDb = isRecorrente && /^\d{2}-\d{2}$/.test(data) ? `2000-${data}` : data;
     const result = await query(
-      'INSERT INTO feriados (empresa_id, data, descricao, tipo, recorrente) VALUES (?, ?, ?, ?, ?)',
-      [request.empresaId, data, descricao, tipo || 'empresa', recorrente || 0]
+      'INSERT INTO feriados (empresa_id, data, descricao, tipo, recorrente, uf, municipio_ibge) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [request.empresaId, dataDb, nome.trim(), tipo || 'empresa', isRecorrente, uf || null, municipio_ibge || null]
     );
     return reply.code(201).send(successResponse({ id: result.insertId }, 'Feriado criado'));
+  });
+
+  fastify.put('/feriados/:id', {
+    preHandler: [authorize('admin')],
+  }, async (request, reply) => {
+    const [existing] = await query(
+      'SELECT id FROM feriados WHERE id = ? AND empresa_id = ?',
+      [request.params.id, request.empresaId]
+    );
+    if (!existing) return reply.code(404).send({ error: 'Feriado não encontrado' });
+
+    const { nome, data, tipo, recorrente, uf, municipio_ibge } = request.body ?? {};
+    const fields = [];
+    const values = [];
+    const isRecorrente = recorrente !== undefined ? (recorrente ? 1 : 0) : undefined;
+    if (nome !== undefined)          { fields.push('descricao = ?');     values.push(nome.trim()); }
+    if (data !== undefined) {
+      const dataDb = isRecorrente && /^\d{2}-\d{2}$/.test(data) ? `2000-${data}` : data;
+      fields.push('data = ?'); values.push(dataDb);
+    }
+    if (tipo !== undefined)          { fields.push('tipo = ?');          values.push(tipo); }
+    if (isRecorrente !== undefined)  { fields.push('recorrente = ?');    values.push(isRecorrente); }
+    if (uf !== undefined)            { fields.push('uf = ?');            values.push(uf || null); }
+    if (municipio_ibge !== undefined){ fields.push('municipio_ibge = ?'); values.push(municipio_ibge || null); }
+
+    if (fields.length === 0) return reply.code(400).send({ error: 'Nenhum campo para atualizar' });
+    values.push(request.params.id);
+    await query(`UPDATE feriados SET ${fields.join(', ')} WHERE id = ?`, values);
+    return successResponse(null, 'Feriado atualizado');
+  });
+
+  fastify.delete('/feriados/:id', {
+    preHandler: [authorize('admin')],
+  }, async (request, reply) => {
+    const [existing] = await query(
+      'SELECT id FROM feriados WHERE id = ? AND empresa_id = ?',
+      [request.params.id, request.empresaId]
+    );
+    if (!existing) return reply.code(404).send({ error: 'Feriado não encontrado' });
+    await query('DELETE FROM feriados WHERE id = ?', [request.params.id]);
+    return successResponse(null, 'Feriado excluído');
   });
 }

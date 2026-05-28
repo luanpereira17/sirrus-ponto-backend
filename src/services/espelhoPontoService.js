@@ -29,7 +29,6 @@ function buildTurnoHorario(func) {
   return `${e}-${s}`;
 }
 
-const STATUS_OCORRENCIA = new Set(['atestado', 'abono', 'falta_justificada', 'licenca', 'outros']);
 
 function pad2(n) {
   return String(n).padStart(2, '0');
@@ -196,17 +195,54 @@ function nextDateStr(dateStr) {
   return `${next.getUTCFullYear()}-${pad2(next.getUTCMonth() + 1)}-${pad2(next.getUTCDate())}`;
 }
 
-function calcExtras100pct(status, dow, minutos, minutos_referencia, lotacao) {
-  if (!lotacao || minutos <= 0) return 0;
-  let tipo = null;
-  if (status === 'feriado') {
-    tipo = lotacao.feriado_tipo;
-  } else if (dow === 0) {
-    tipo = lotacao.domingo_tipo;
+function diaPrevistoDeTrabalho(usaEscala, escalaEntry, hasTurnoHorarios, turnoHorariosMap, dow) {
+  if (usaEscala && escalaEntry) return escalaEntry.tipo !== 'folga';
+  if (hasTurnoHorarios) return turnoHorariosMap.get(dow)?.trabalha === 1;
+  return dow !== 0; // CLT fallback
+}
+
+function feriadoAfetaFuncionario(feriado, funcionario) {
+  if (!feriado) return false;
+  if (feriado.tipo === 'nacional' || feriado.tipo === 'empresa') return true;
+  if (feriado.tipo === 'estadual') {
+    if (!funcionario.municipio_id) return false; // sem cidade cadastrada, estado desconhecido
+    return funcionario.municipio_estado === feriado.uf;
   }
-  if (!tipo || tipo === 'nao_calcular' || tipo === '50pct') return 0;
-  if (tipo === '100pct_total') return minutos;
-  if (tipo === '100pct_extra') return Math.max(0, minutos - minutos_referencia);
+  if (feriado.tipo === 'municipal') {
+    if (!funcionario.municipio_id) return false; // sem cidade cadastrada, município desconhecido
+    return String(funcionario.municipio_ibge) === String(feriado.municipio_ibge);
+  }
+  return false;
+}
+
+function resolverIgual(tipo, lotacao) {
+  if (tipo === 'igual_domingo') return lotacao.domingo_tipo;
+  if (tipo === 'igual_feriado') return lotacao.feriado_tipo;
+  return tipo;
+}
+
+function aplicarTipo(tipo, minutos_trabalhados, minutos_previstos) {
+  switch (tipo) {
+    case 'nao_calcular': return 0;
+    case '50pct':        return Math.floor(Math.max(0, minutos_trabalhados - (minutos_previstos || 0)) * 0.5);
+    case '100pct_extra': return Math.max(0, minutos_trabalhados - (minutos_previstos || 0));
+    case '100pct_total': return minutos_trabalhados;
+    default:             return 0;
+  }
+}
+
+function calcExtras100pct({ feriado, dow, lotacao, marcacoes, minutos_trabalhados, minutos_previstos, diaPrevisto }) {
+  if (!lotacao || marcacoes.length === 0) return 0;
+  if (feriado) return aplicarTipo(lotacao.feriado_tipo, minutos_trabalhados, minutos_previstos);
+  if (dow === 0) {
+    const tipo = diaPrevisto
+      ? lotacao.domingo_tipo
+      : resolverIgual(lotacao.domingo_nao_previsto_tipo, lotacao);
+    return aplicarTipo(tipo, minutos_trabalhados, minutos_previstos);
+  }
+  if (!diaPrevisto) {
+    return aplicarTipo(resolverIgual(lotacao.dia_nao_previsto_tipo, lotacao), minutos_trabalhados, minutos_previstos);
+  }
   return 0;
 }
 
@@ -240,7 +276,7 @@ export const EspelhoPontoService = {
           )
         : Promise.resolve([]),
       funcionario?.lotacao_id
-        ? query('SELECT feriado_tipo, domingo_tipo, hora_inicio_adicional_noturno, dividir_extras_50_100 FROM lotacoes WHERE id = ?', [funcionario.lotacao_id])
+        ? query('SELECT feriado_tipo, domingo_tipo, domingo_nao_previsto_tipo, dia_nao_previsto_tipo, hora_inicio_adicional_noturno, dividir_extras_50_100 FROM lotacoes WHERE id = ?', [funcionario.lotacao_id])
         : Promise.resolve([]),
     ]);
     for (const r of thRows) turnoHorariosMap.set(Number(r.dia_semana), r);
@@ -279,7 +315,7 @@ export const EspelhoPontoService = {
 
     const feriadosMap = new Map();
     for (const f of feriadosRows) {
-      feriadosMap.set(String(f.dia).slice(0, 10), { descricao: f.descricao, tipo: f.tipo });
+      feriadosMap.set(String(f.dia).slice(0, 10), { descricao: f.descricao, tipo: f.tipo, uf: f.uf || null, municipio_ibge: f.municipio_ibge || null });
     }
 
     const byDay = new Map();
@@ -316,31 +352,45 @@ export const EspelhoPontoService = {
 
       const { minutos, incompleto: intervaloAberto } = minutosTrabalhadosPar(raw);
       const dow = diaSemanaPt(data);
-      const feriado = feriadosMap.get(data) || null;
+      const feriadoRaw = feriadosMap.get(data) || null;
+      const feriado = feriadoAfetaFuncionario(feriadoRaw, funcionario) ? feriadoRaw : null;
       const isFuturo = data > today;
       const ocorrencia = ocorrenciaMap.get(data) || null;
 
       const escalaEntry = usaEscala ? escalaMap.get(data) : null;
+      const diaPrevisto = diaPrevistoDeTrabalho(usaEscala, escalaEntry, hasTurnoHorarios, turnoHorariosMap, dow);
+
+      const modifiers = [];
+      if (feriado) modifiers.push('feriado');
 
       let status;
       let ehDiaTrabalho = false;
 
       if (isFuturo) {
         status = 'futuro';
-      } else if (feriado) {
-        status = 'feriado';
       } else if (ocorrencia) {
         status = 'ocorrencia';
-        ehDiaTrabalho = true; // compute minutos_previstos even for justified absences
-      } else if (usaEscala && escalaEntry) {
-        if (escalaEntry.tipo === 'folga') {
+        ehDiaTrabalho = true;
+      } else if (feriado) {
+        // Feriado: repouso remunerado pela CLT — ausência não é falta.
+        // Se houver batidas, é 'presente' com 100% sobre tudo; sem batidas, é 'folga'.
+        if (marcacoes.length > 0) {
+          status = 'presente';
+          ehDiaTrabalho = false; // saldo zerado abaixo; não gera débito
+        } else {
+          status = 'folga';
+        }
+      } else if (usaEscala) {
+        if (!escalaEntry) {
+          status = 'sem_escala';
+          modifiers.push('escala_ausente');
+        } else if (escalaEntry.tipo === 'folga') {
           status = 'folga';
         } else {
           ehDiaTrabalho = true;
           status = marcacoes.length > 0 ? 'presente' : 'falta';
         }
       } else if (hasTurnoHorarios) {
-        // Per-day schedule: only days with trabalha=1 are work days
         const th = turnoHorariosMap.get(dow);
         if (!th || !th.trabalha) {
           status = 'folga';
@@ -349,19 +399,30 @@ export const EspelhoPontoService = {
           status = marcacoes.length > 0 ? 'presente' : 'falta';
         }
       } else {
-        // Legacy fallback: Dom(0) = folga; Seg–Sáb(1–6) = dia de trabalho
+        // CLT fallback: Dom(0) = folga; Seg–Sáb = dia de trabalho
         if (dow === 0) {
           status = 'folga';
         } else {
           ehDiaTrabalho = true;
           status = marcacoes.length > 0 ? 'presente' : 'falta';
+          modifiers.push('sem_regime');
         }
+      }
+
+      // trabalho_em_folga: marcações em dia não previsto (exceto futuro e ocorrencia)
+      if (!diaPrevisto && !isFuturo && status !== 'ocorrencia' && marcacoes.length > 0) {
+        modifiers.push('trabalho_em_folga');
+      }
+
+      // incompleto: apenas dias de trabalho com marcações e batidas ímpares
+      if (ehDiaTrabalho && marcacoes.length > 0 && marcacoes.length % 2 !== 0) {
+        modifiers.push('incompleto');
       }
 
       if (status === 'presente') diasPresentes += 1;
       else if (status === 'falta') diasFalta += 1;
       else if (status === 'folga') diasFolga += 1;
-      else if (status === 'ocorrencia' || STATUS_OCORRENCIA.has(status)) diasOcorrencia += 1;
+      else if (status === 'ocorrencia') diasOcorrencia += 1;
 
       let minutos_previstos = null;
       let saldo_minutos = null;
@@ -402,13 +463,17 @@ export const EspelhoPontoService = {
         ? batidasEsperadasDoDia(turnoHorariosMap.get(dow))
         : batidasEsperadasDia;
 
+      // incompleto: derive from modifiers (set in cascade above) + cicloBatidas check
       const cicloBatidasIncompleto =
         batidasEsperadasHoje != null &&
         ehDiaTrabalho &&
         marcacoes.length > 0 &&
         marcacoes.length % batidasEsperadasHoje !== 0;
 
-      const incompleto = intervaloAberto || cicloBatidasIncompleto;
+      if ((intervaloAberto || cicloBatidasIncompleto) && ehDiaTrabalho && marcacoes.length > 0) {
+        if (!modifiers.includes('incompleto')) modifiers.push('incompleto');
+      }
+      const incompleto = modifiers.includes('incompleto');
 
       if (marcacoes.length) diasComMarcacao += 1;
       if (incompleto && marcacoes.length) diasIncompletos += 1;
@@ -423,7 +488,15 @@ export const EspelhoPontoService = {
       } else {
         minutos_referencia = minutosPrevistoDia ?? 0;
       }
-      let extras_100pct_minutos = calcExtras100pct(status, dow, minutos, minutos_referencia, lotacao);
+      let extras_100pct_minutos = calcExtras100pct({
+        feriado,
+        dow,
+        lotacao,
+        marcacoes,
+        minutos_trabalhados: minutos,
+        minutos_previstos: minutos_referencia,
+        diaPrevisto,
+      });
       let extras_50pct_minutos = 0;
 
       // dividir_extras_50_100: when a regular-day shift crosses midnight into a 100%-day
@@ -433,7 +506,8 @@ export const EspelhoPontoService = {
         if (minutosApos > 0) {
           const nextDay = nextDateStr(data);
           const nextDow = (dow + 1) % 7;
-          const isNextFeriado = feriadosMap.has(nextDay);
+          const nextFeriadoRaw = feriadosMap.get(nextDay) || null;
+          const isNextFeriado = feriadoAfetaFuncionario(nextFeriadoRaw, funcionario);
           let tipoNextDay = null;
           if (isNextFeriado) tipoNextDay = lotacao.feriado_tipo;
           else if (nextDow === 0) tipoNextDay = lotacao.domingo_tipo;
@@ -465,6 +539,8 @@ export const EspelhoPontoService = {
         dia_semana: dow,
         dia_semana_label: DIAS_PT[dow],
         status,
+        modifiers,
+        dia_trabalho: ehDiaTrabalho,
         feriado,
         ocorrencia: ocorrencia
           ? {

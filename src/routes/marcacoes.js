@@ -5,6 +5,7 @@ import { EspelhoPontoService, fusoHorarioToTzOffset } from '../services/espelhoP
 import { successResponse } from '../utils/helpers.js';
 import { toIsoDataHoraUtc } from '../utils/dataHoraIso.js';
 import { query } from '../config/database.js';
+import { auditar } from '../services/auditService.js';
 
 const espelhoQuerySchema = {
   querystring: {
@@ -166,12 +167,14 @@ export default async function marcacaoRoutes(fastify) {
       editadoPor: request.user.id,
     });
 
-    return reply.code(201).send(successResponse({
+    const responseData = {
       id: row.id,
       data_hora: toIsoDataHoraUtc(row.data_hora),
       tipo: row.tipo,
       motivo_edicao: row.motivo_edicao,
-    }, 'Batida lançada'));
+    };
+    auditar({ acao: 'INSERT', tabela: 'marcacoes', registro_id: row.id, dados_anteriores: null, dados_novos: responseData, usuario_id: request.user.id, ip: request.ip });
+    return reply.code(201).send(successResponse(responseData, 'Batida lançada'));
   });
 
   const editarSchema = {
@@ -213,7 +216,7 @@ export default async function marcacaoRoutes(fastify) {
       motivo: motivo || null,
       editadoPor: request.user.id,
     });
-
+    auditar({ acao: 'UPDATE', tabela: 'marcacoes', registro_id: id, dados_anteriores: { data_hora: marcacao.data_hora }, dados_novos: { data_hora: normalized, motivo: motivo || null }, usuario_id: request.user.id, ip: request.ip });
     return successResponse({ id }, 'Batida atualizada');
   });
 
@@ -237,6 +240,7 @@ export default async function marcacaoRoutes(fastify) {
     }
 
     await MarcacaoRepository.deleteById(id);
+    auditar({ acao: 'DELETE', tabela: 'marcacoes', registro_id: id, dados_anteriores: { data_hora: marcacao.data_hora, funcionario_id: marcacao.funcionario_id }, dados_novos: null, usuario_id: request.user.id, ip: request.ip });
     return successResponse({ id }, 'Batida excluída');
   });
 }

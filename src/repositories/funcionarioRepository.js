@@ -94,7 +94,9 @@ export const FuncionarioRepository = {
               t.retorno_intervalo AS turno_retorno_intervalo,
               l.nome AS lotacao_nome,
               g.nome AS gestor_nome,
-              m.fuso_horario
+              m.fuso_horario,
+              m.ESTADO AS municipio_estado,
+              m.CODMUNICIPIO AS municipio_ibge
        FROM funcionarios f
        LEFT JOIN filiais fi ON f.filial_id = fi.id
        LEFT JOIN departamentos d ON f.departamento_id = d.id
